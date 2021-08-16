@@ -2,13 +2,16 @@
 
 package outbound
 
-//go:generate errorgen
+//go:generate go run v2ray.com/core/common/errors/errorgen
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"hash/crc64"
 	"time"
 
-	"v2ray.com/core"
+	core "v2ray.com/core"
 	"v2ray.com/core/common"
 	"v2ray.com/core/common/buf"
 	"v2ray.com/core/common/net"
@@ -36,7 +39,7 @@ type Handler struct {
 func New(ctx context.Context, config *Config) (*Handler, error) {
 	serverList := protocol.NewServerList()
 	for _, rec := range config.Receiver {
-		s, err := protocol.NewServerSpecFromPB(*rec)
+		s, err := protocol.NewServerSpecFromPB(rec)
 		if err != nil {
 			return nil, newError("failed to parse server spec").Base(err)
 		}
@@ -54,12 +57,12 @@ func New(ctx context.Context, config *Config) (*Handler, error) {
 }
 
 // Process implements proxy.Outbound.Process().
-func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer internet.Dialer) error {
+func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer internet.Dialer) error {
 	var rec *protocol.ServerSpec
 	var conn internet.Connection
 
 	err := retry.ExponentialBackoff(5, 200).On(func() error {
-		rec = v.serverPicker.PickServer()
+		rec = h.serverPicker.PickServer()
 		rawConn, err := dialer.Dial(ctx, rec.Destination())
 		if err != nil {
 			return err
@@ -71,7 +74,7 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	if err != nil {
 		return newError("failed to find an available destination").Base(err).AtWarning()
 	}
-	defer conn.Close() //nolint: errcheck
+	defer conn.Close()
 
 	outbound := session.OutboundFromContext(ctx)
 	if outbound == nil || !outbound.Target.IsValid() {
@@ -110,13 +113,31 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		request.Option.Set(protocol.RequestOptionGlobalPadding)
 	}
 
+	if request.Security == protocol.SecurityType_ZERO {
+		request.Security = protocol.SecurityType_NONE
+		request.Option.Clear(protocol.RequestOptionChunkStream)
+		request.Option.Clear(protocol.RequestOptionChunkMasking)
+	}
+
+	if account.AuthenticatedLengthExperiment {
+		request.Option.Set(protocol.RequestOptionAuthenticatedLength)
+	}
+
 	input := link.Reader
 	output := link.Writer
 
-	ctx = context.WithValue(ctx, vmess.TestsEnabled, user.Account.(*vmess.MemoryAccount).TestsEnabled)
+	isAEAD := false
+	if !aeadDisabled && len(account.AlterIDs) == 0 {
+		isAEAD = true
+	}
 
-	session := encoding.NewClientSession(protocol.DefaultIDHash, ctx)
-	sessionPolicy := v.policyManager.ForLevel(request.User.Level)
+	hashkdf := hmac.New(sha256.New, []byte("VMessBF"))
+	hashkdf.Write(account.ID.Bytes())
+
+	behaviorSeed := crc64.Checksum(hashkdf.Sum(nil), crc64.MakeTable(crc64.ISO))
+
+	session := encoding.NewClientSession(ctx, isAEAD, protocol.DefaultIDHash, int64(behaviorSeed))
+	sessionPolicy := h.policyManager.ForLevel(request.User.Level)
 
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, sessionPolicy.Timeouts.ConnectionIdle)
@@ -142,7 +163,7 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 			return err
 		}
 
-		if request.Option.Has(protocol.RequestOptionChunkStream) {
+		if request.Option.Has(protocol.RequestOptionChunkStream) && !account.NoTerminationSignal {
 			if err := bodyWriter.WriteMultiBuffer(buf.MultiBuffer{}); err != nil {
 				return err
 			}
@@ -159,14 +180,14 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		if err != nil {
 			return newError("failed to read header").Base(err)
 		}
-		v.handleCommand(rec.Destination(), header.Command)
+		h.handleCommand(rec.Destination(), header.Command)
 
 		bodyReader := session.DecodeResponseBody(request, reader)
 
 		return buf.Copy(bodyReader, output, buf.UpdateActivity(timer))
 	}
 
-	var responseDonePost = task.OnSuccess(responseDone, task.Close(output))
+	responseDonePost := task.OnSuccess(responseDone, task.Close(output))
 	if err := task.Run(ctx, requestDone, responseDonePost); err != nil {
 		return newError("connection ends").Base(err)
 	}
@@ -176,6 +197,7 @@ func (v *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 var (
 	enablePadding = false
+	aeadDisabled  = false
 )
 
 func shouldEnablePadding(s protocol.SecurityType) bool {
@@ -188,8 +210,14 @@ func init() {
 	}))
 
 	const defaultFlagValue = "NOT_DEFINED_AT_ALL"
+
 	paddingValue := platform.NewEnvFlag("v2ray.vmess.padding").GetValue(func() string { return defaultFlagValue })
 	if paddingValue != defaultFlagValue {
 		enablePadding = true
+	}
+
+	isAeadDisabled := platform.NewEnvFlag("v2ray.vmess.aead.disabled").GetValue(func() string { return defaultFlagValue })
+	if isAeadDisabled == "true" {
+		aeadDisabled = true
 	}
 }

@@ -1,9 +1,10 @@
 package antireplay
 
 import (
-	cuckoo "github.com/seiflotfy/cuckoofilter"
 	"sync"
 	"time"
+
+	cuckoo "github.com/seiflotfy/cuckoofilter"
 )
 
 func NewAntiReplayWindow(AntiReplayTime int64) *AntiReplayWindow {

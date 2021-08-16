@@ -2,7 +2,7 @@
 
 package inbound
 
-//go:generate errorgen
+//go:generate go run v2ray.com/core/common/errors/errorgen
 
 import (
 	"context"
@@ -11,12 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"v2ray.com/core"
+	core "v2ray.com/core"
 	"v2ray.com/core/common"
 	"v2ray.com/core/common/buf"
 	"v2ray.com/core/common/errors"
 	"v2ray.com/core/common/log"
 	"v2ray.com/core/common/net"
+	"v2ray.com/core/common/platform"
 	"v2ray.com/core/common/protocol"
 	"v2ray.com/core/common/session"
 	"v2ray.com/core/common/signal"
@@ -148,7 +149,7 @@ func (h *Handler) Close() error {
 
 // Network implements proxy.Inbound.Network().
 func (*Handler) Network() []net.Network {
-	return []net.Network{net.Network_TCP}
+	return []net.Network{net.Network_TCP, net.Network_UNIX}
 }
 
 func (h *Handler) GetUser(email string) *protocol.MemoryUser {
@@ -202,7 +203,9 @@ func transferResponse(timer signal.ActivityUpdater, session *encoding.ServerSess
 		return err
 	}
 
-	if request.Option.Has(protocol.RequestOptionChunkStream) {
+	account := request.User.Account.(*vmess.MemoryAccount)
+
+	if request.Option.Has(protocol.RequestOptionChunkStream) && !account.NoTerminationSignal {
 		if err := bodyWriter.WriteMultiBuffer(buf.MultiBuffer{}); err != nil {
 			return err
 		}
@@ -224,6 +227,7 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection i
 
 	reader := &buf.BufferedReader{Reader: buf.NewReader(connection)}
 	svrSession := encoding.NewServerSession(h.clients, h.sessionHistory)
+	svrSession.SetAEADForced(aeadForced)
 	request, err := svrSession.DecodeRequestHeader(reader)
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
@@ -304,7 +308,7 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection i
 		return transferResponse(timer, svrSession, request, response, link.Reader, writer)
 	}
 
-	var requestDonePost = task.OnSuccess(requestDone, task.Close(link.Writer))
+	requestDonePost := task.OnSuccess(requestDone, task.Close(link.Writer))
 	if err := task.Run(ctx, requestDonePost, responseDone); err != nil {
 		common.Interrupt(link.Reader)
 		common.Interrupt(link.Writer)
@@ -350,8 +354,29 @@ func (h *Handler) generateCommand(ctx context.Context, request *protocol.Request
 	return nil
 }
 
+var (
+	aeadForced     = false
+	aeadForced2022 = false
+)
+
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
 		return New(ctx, config.(*Config))
 	}))
+
+	defaultFlagValue := "NOT_DEFINED_AT_ALL"
+
+	if time.Now().Year() >= 2022 {
+		defaultFlagValue = "true_by_default_2022"
+	}
+
+	isAeadForced := platform.NewEnvFlag("v2ray.vmess.aead.forced").GetValue(func() string { return defaultFlagValue })
+	if isAeadForced == "true" {
+		aeadForced = true
+	}
+
+	if isAeadForced == "true_by_default_2022" {
+		aeadForced = true
+		aeadForced2022 = true
+	}
 }

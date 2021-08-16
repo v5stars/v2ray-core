@@ -24,7 +24,7 @@ func toAccount(a *vmess.Account) protocol.Account {
 func TestRequestSerialization(t *testing.T) {
 	user := &protocol.MemoryUser{
 		Level: 0,
-		Email: "test@v2ray.com",
+		Email: "test@v2fly.org",
 	}
 	id := uuid.New()
 	account := &vmess.Account{
@@ -37,13 +37,13 @@ func TestRequestSerialization(t *testing.T) {
 		Version:  1,
 		User:     user,
 		Command:  protocol.RequestCommandTCP,
-		Address:  net.DomainAddress("www.v2ray.com"),
+		Address:  net.DomainAddress("www.v2fly.org"),
 		Port:     net.Port(443),
 		Security: protocol.SecurityType_AES128_GCM,
 	}
 
 	buffer := buf.New()
-	client := NewClientSession(protocol.DefaultIDHash, context.TODO())
+	client := NewClientSession(context.TODO(), true, protocol.DefaultIDHash, 0)
 	common.Must(client.EncodeRequestHeader(expectedRequest, buffer))
 
 	buffer2 := buf.New()
@@ -74,7 +74,7 @@ func TestRequestSerialization(t *testing.T) {
 func TestInvalidRequest(t *testing.T) {
 	user := &protocol.MemoryUser{
 		Level: 0,
-		Email: "test@v2ray.com",
+		Email: "test@v2fly.org",
 	}
 	id := uuid.New()
 	account := &vmess.Account{
@@ -87,13 +87,13 @@ func TestInvalidRequest(t *testing.T) {
 		Version:  1,
 		User:     user,
 		Command:  protocol.RequestCommand(100),
-		Address:  net.DomainAddress("www.v2ray.com"),
+		Address:  net.DomainAddress("www.v2fly.org"),
 		Port:     net.Port(443),
 		Security: protocol.SecurityType_AES128_GCM,
 	}
 
 	buffer := buf.New()
-	client := NewClientSession(protocol.DefaultIDHash, context.TODO())
+	client := NewClientSession(context.TODO(), true, protocol.DefaultIDHash, 0)
 	common.Must(client.EncodeRequestHeader(expectedRequest, buffer))
 
 	buffer2 := buf.New()
@@ -116,7 +116,7 @@ func TestInvalidRequest(t *testing.T) {
 func TestMuxRequest(t *testing.T) {
 	user := &protocol.MemoryUser{
 		Level: 0,
-		Email: "test@v2ray.com",
+		Email: "test@v2fly.org",
 	}
 	id := uuid.New()
 	account := &vmess.Account{
@@ -134,7 +134,7 @@ func TestMuxRequest(t *testing.T) {
 	}
 
 	buffer := buf.New()
-	client := NewClientSession(protocol.DefaultIDHash, context.TODO())
+	client := NewClientSession(context.TODO(), true, protocol.DefaultIDHash, 0)
 	common.Must(client.EncodeRequestHeader(expectedRequest, buffer))
 
 	buffer2 := buf.New()

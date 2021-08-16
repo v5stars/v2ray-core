@@ -1,11 +1,12 @@
 package protocol
 
 import (
+	reflect "reflect"
+	sync "sync"
+
 	proto "github.com/golang/protobuf/proto"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	reflect "reflect"
-	sync "sync"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	SecurityType_AES128_GCM        SecurityType = 3
 	SecurityType_CHACHA20_POLY1305 SecurityType = 4
 	SecurityType_NONE              SecurityType = 5
+	SecurityType_ZERO              SecurityType = 6
 )
 
 // Enum value maps for SecurityType.
